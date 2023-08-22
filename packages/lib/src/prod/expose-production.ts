@@ -42,9 +42,13 @@ export function prodExposePlugin(
   options: VitePluginFederationOptions
 ): PluginHooks {
   let moduleMap = ''
+
+  // parsedOptions.prodExpose = [[对外暴露的组件名称, { import: 组件在remote中的相对路径 }], ...]
+  // 例如：[['./Button', { import: './src/components/Button' }], ...]
   parsedOptions.prodExpose = parseExposeOptions(options)
   // exposes module
   for (const item of parsedOptions.prodExpose) {
+    // 返回形如 '__rf_shared__${./Button}'
     const moduleName = getModuleMarker(`\${${item[0]}}`, SHARED)
     EXTERNALS.push(moduleName)
     const exposeFilepath = normalizePath(resolve(item[1].import))
@@ -53,6 +57,10 @@ export function prodExposePlugin(
       item[0],
       `__federation_expose_${removeNonRegLetter(item[0], NAME_CHAR_REG)}`
     )
+
+    // moduleMap 似乎是 remoteEntry 中的 moduleMap
+    // '${DYNAMIC_LOADING_CSS_PREFIX}${exposeFilepath}' 这一部分在 generateBundle 钩子中被替换为css文件数组
+    // '\${__federation_expose_${item[0]}}' 这一部分在 generateBundle 钩子中被替换为js文件数组
     moduleMap += `\n"${item[0]}":()=>{
       ${DYNAMIC_LOADING_CSS}('${DYNAMIC_LOADING_CSS_PREFIX}${exposeFilepath}')
       return __federation_import('\${__federation_expose_${item[0]}}').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},`
@@ -63,6 +71,7 @@ export function prodExposePlugin(
   return {
     name: 'originjs:expose-production',
     virtualFile: {
+      // remoteEntry.js 的内容
       // code generated for remote
       // language=JS
       __remoteEntryHelper__: `
@@ -104,7 +113,7 @@ export function prodExposePlugin(
       });
     }`
     },
-
+    // vite的钩子，在解析 Vite 配置后调用
     configResolved(config: ResolvedConfig) {
       viteConfigResolved = config
     },
@@ -112,6 +121,7 @@ export function prodExposePlugin(
     buildStart() {
       // if we don't expose any modules, there is no need to emit file
       if (parsedOptions.prodExpose.length > 0) {
+        // 生成 remoteEntry.js
         this.emitFile({
           fileName: `${
             builderInfo.assetsDir ? builderInfo.assetsDir + '/' : ''
@@ -128,6 +138,8 @@ export function prodExposePlugin(
       let remoteEntryChunk
       for (const file in bundle) {
         const chunk = bundle[file] as OutputChunk
+        // 虚拟模块在 Vite（以及 Rollup）中都以 virtual: 为前缀
+        // facadeModuleId 是当前 chunk 的入口文件
         if (chunk?.facadeModuleId === '\0virtual:__remoteEntryHelper__') {
           remoteEntryChunk = chunk
           break
@@ -137,6 +149,9 @@ export function prodExposePlugin(
       if (remoteEntryChunk) {
         const filepathMap = new Map()
         const getFilename = (name) => parse(parse(name).name).name
+
+        // 替换remoteEntry.js 中 css chunk 的占位符
+        // 收集bundle中，是css模块的chunk
         const cssBundlesMap: Map<string, OutputAsset | OutputChunk> =
           Object.keys(bundle)
             .filter((name) => extname(name) === '.css')
@@ -146,11 +161,14 @@ export function prodExposePlugin(
               return res
             }, new Map())
         remoteEntryChunk.code = remoteEntryChunk.code.replace(
+          // 匹配字符串中以 DYNAMIC_LOADING_CSS_PREFIX 开头并以单引号或双引号结束的部分
           new RegExp(`(["'])${DYNAMIC_LOADING_CSS_PREFIX}.*?\\1`, 'g'),
           (str) => {
             // when build.cssCodeSplit: false, all files are aggregated into style.xxxxxxxx.css
             if (viteConfigResolved && !viteConfigResolved.build.cssCodeSplit) {
+              // 如果配置了 build.cssCodeSplit 为 false，则css文件都会被打包到同一个文件中
               if (cssBundlesMap.size) {
+                // 返回形如 '["style-33deb6df.css", ...]' 的数组字符串
                 return `[${[...cssBundlesMap.values()]
                   .map((cssBundle) =>
                     JSON.stringify(basename(cssBundle.fileName))
@@ -160,6 +178,7 @@ export function prodExposePlugin(
                 return '[]'
               }
             }
+            // 提取文件路径，并去掉前缀和最后一个字符（通常是引号）
             const filepath = str.slice(
               (`'` + DYNAMIC_LOADING_CSS_PREFIX).length,
               -1
@@ -197,8 +216,10 @@ export function prodExposePlugin(
           }
         )
 
+        // 替换 remoteEntry.js 中 js chunk 的占位符
         // replace the export file placeholder path to final chunk path
         for (const expose of parsedOptions.prodExpose) {
+          // 在生成的bundle中查找暴露的组件
           const module = Object.keys(bundle).find((module) => {
             const chunk = bundle[module]
             return chunk.name === EXPOSES_KEY_MAP.get(expose[0])
@@ -218,6 +239,7 @@ export function prodExposePlugin(
           }
         }
 
+        // 移除掉没有被替换掉的、对__v__css__的导入
         // remove all __f__dynamic_loading_css__ after replace
         let ast: AcornNode | null = null
         try {
