@@ -13,6 +13,7 @@
 // SPDX-License-Identifier: MulanPSL-2.0
 // *****************************************************************************
 
+import { Log } from '../utils/tools'
 import type { PluginHooks } from '../../types/pluginHooks'
 import { NAME_CHAR_REG, parseSharedOptions, removeNonRegLetter } from '../utils'
 import { builderInfo, parsedOptions } from '../public'
@@ -27,8 +28,12 @@ import federation_fn_import from './federation_fn_import.js?raw'
 export function prodSharedPlugin(
   options: VitePluginFederationOptions
 ): PluginHooks {
+  Log('prodSharedPlugin parsedOptions', parsedOptions)
+
   // parsedOptions.prodShared = [["依赖名", { 依赖配置 }], ...]
   parsedOptions.prodShared = parseSharedOptions(options)
+
+  Log('parsedOptions.prodShared', JSON.stringify(parsedOptions.prodShared))
 
   // 将二维数组转成对象
   const shareName2Prop = new Map<string, any>()
@@ -50,6 +55,7 @@ export function prodSharedPlugin(
     // 1.初始化当前是 host 还是 remote
     // 2.从 rollup external 中移除 shared 依赖，移除的原因是 rollup 需要对 shared 依赖进行处理
     options(inputOptions) {
+      Log('parsedOptions', parsedOptions)
       // 判断是host还是remote
       isRemote = !!parsedOptions.prodExpose.length
       isHost =
